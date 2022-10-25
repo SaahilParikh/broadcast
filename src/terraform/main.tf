@@ -135,9 +135,45 @@ resource "aws_lambda_permission" "allow_api" {
   principal     = "apigateway.amazonaws.com"
 }
 
+
+resource "aws_route53domains_registered_domain" "domain" {
+  domain_name = var.domain_name
+
+  name_server {
+    name = aws_route53_zone.hosted_zone.name_servers[0]
+  }
+
+  name_server {
+    name = aws_route53_zone.hosted_zone.name_servers[1]
+  }
+
+   name_server {
+    name = aws_route53_zone.hosted_zone.name_servers[2]
+  }
+
+   name_server {
+    name = aws_route53_zone.hosted_zone.name_servers[3]
+  }
+}
+
 resource "aws_route53_zone" "hosted_zone" {
-  comment = format("HostedZone created by Route53 Registrar for %s", var.project_name)
+  comment = format("Created for %s", var.project_name)
   name    = var.domain_name
+}
+
+resource "aws_route53_record" "NS_record" {
+  allow_overwrite = true
+  name            = var.domain_name
+  ttl             = 172800
+  type            = "NS"
+  zone_id         = aws_route53_zone.hosted_zone.zone_id
+
+  records = [
+    aws_route53_zone.hosted_zone.name_servers[0],
+    aws_route53_zone.hosted_zone.name_servers[1],
+    aws_route53_zone.hosted_zone.name_servers[2],
+    aws_route53_zone.hosted_zone.name_servers[3],
+  ]
 }
 
 resource "aws_route53_record" "api_gw_record" {
@@ -151,10 +187,31 @@ resource "aws_route53_record" "api_gw_record" {
   }
 }
 
+# resource "aws_route53_record" "www" {
+#   zone_id = aws_route53_zone.hosted_zone.zone_id
+#   name    = var.www_domain_name
+#   type    = "A"
+#   ttl     = 300
+#   records = []
+# }
+
 resource "aws_acm_certificate" "api_domain_certificate" {
+  domain_name       = var.api_domain_name
+  validation_method = "DNS"
+  options {
+    certificate_transparency_logging_preference = "ENABLED"
+  }
+
+  lifecycle {
+    create_before_destroy = true
+  }
+}
+
+resource "aws_acm_certificate" "domain_certificate" {
   domain_name = var.domain_name
+  provider    = aws.virginia
   subject_alternative_names = [
-    var.api_domain_name
+    var.www_domain_name
   ]
   validation_method = "DNS"
 
@@ -167,8 +224,49 @@ resource "aws_acm_certificate" "api_domain_certificate" {
   }
 }
 
+resource "aws_route53_record" "domain_cname_records" {
+  for_each = {
+    for dvo in aws_acm_certificate.domain_certificate.domain_validation_options : dvo.domain_name => {
+      name   = dvo.resource_record_name
+      record = dvo.resource_record_value
+      type   = dvo.resource_record_type
+    }
+  }
+
+  allow_overwrite = true
+  name            = each.value.name
+  records         = [each.value.record]
+  ttl             = 60
+  type            = each.value.type
+  zone_id         = aws_route53_zone.hosted_zone.zone_id
+}
+resource "aws_route53_record" "api_cname_records" {
+  for_each = {
+    for dvo in aws_acm_certificate.api_domain_certificate.domain_validation_options : dvo.domain_name => {
+      name   = dvo.resource_record_name
+      record = dvo.resource_record_value
+      type   = dvo.resource_record_type
+    }
+  }
+
+  allow_overwrite = true
+  name            = each.value.name
+  records         = [each.value.record]
+  ttl             = 60
+  type            = each.value.type
+  zone_id         = aws_route53_zone.hosted_zone.zone_id
+}
+
+resource "aws_acm_certificate_validation" "domain_certificate_validation" {
+  certificate_arn         = aws_acm_certificate.domain_certificate.arn
+  provider = aws.virginia
+  validation_record_fqdns = [for record in aws_route53_record.domain_cname_records : record.fqdn]
+
+}
+
 resource "aws_acm_certificate_validation" "api_certificate_validation" {
-  certificate_arn = aws_acm_certificate.api_domain_certificate.arn
+  certificate_arn         = aws_acm_certificate.api_domain_certificate.arn
+  validation_record_fqdns = [for record in aws_route53_record.api_cname_records : record.fqdn]
 }
 
 resource "aws_apigatewayv2_domain_name" "api_gateway_domain_name" {
@@ -190,7 +288,8 @@ resource "aws_apigatewayv2_api_mapping" "api_gw_mapping" {
 data "external" "frontend_build" {
   program = ["bash", "-c", <<EOT
     # Relative to working_dir
-    (npm ci && npm run build) >&2 && echo "{\"dest\": \"dist\"}"
+    # (npm ci && npm run build) >&2 &&
+     echo "{\"dest\": \"dist\"}"
     EOT
   ]
   working_dir = format("${path.module}/%s", var.frontend_src_path)
@@ -255,29 +354,8 @@ data "aws_iam_policy_document" "allow_public_get_access" {
   }
 }
 
-resource "aws_acm_certificate" "domain_certificate" {
-  domain_name = var.domain_name
-  provider    = aws.virginia
-  subject_alternative_names = [
-    var.domain_name,
-    var.www_domain_name,
-  ]
-  validation_method = "DNS"
-
-  options {
-    certificate_transparency_logging_preference = "ENABLED"
-  }
-
-  lifecycle {
-    create_before_destroy = true
-  }
-}
-
-resource "aws_acm_certificate_validation" "domain_certificate_validation" {
-  certificate_arn = aws_acm_certificate.domain_certificate.arn
-}
-
 resource "aws_cloudfront_distribution" "cloudfront_distribution" {
+  provider = aws.virginia
   aliases = [
     var.domain_name,
   ]
@@ -339,7 +417,7 @@ resource "aws_cloudfront_distribution" "cloudfront_distribution" {
 
 
 data "aws_cloudfront_cache_policy" "root_bucket_cloudfront_cache_policy" {
-  name        = "Managed-CachingOptimized"
+  name = "Managed-CachingDisabled"
 }
 
 resource "aws_route53_record" "cloudfront_record" {

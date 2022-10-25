@@ -23,14 +23,14 @@ variable "routes" {
 }
 
 variable "domain_name" {
-  default     = "rachelwoody.com"
+  default     = "tinkan.link"
   description = "Also doubles as the name of the bucket without the www. prefix."
 }
 
 variable "api_domain_name" {
-  default = "api.rachelwoody.com"
+  default = "api.tinkan.link"
 }
 
 variable "www_domain_name" {
-  default = "www.rachelwoody.com"
+  default = "www.tinkan.link"
 }

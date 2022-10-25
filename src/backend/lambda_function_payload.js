@@ -8,7 +8,7 @@ exports.handler = async (event, context) => {
 	"Content-Type": "application/json"
   };
 
-  let TableName = "broadcast-items";
+  let TableName = "broadcast-table";
 
   try {
 	switch (event.routeKey) {
@@ -23,11 +23,10 @@ exports.handler = async (event, context) => {
         	Item: {
           	id: requestJSON.id,
             user: requestJSON.user,
-            message: requestJSON.message,
         	}
       	})
       	.promise();
-    	body = `Put item with id ${requestJSON.id} with message ${requestJSON.message} for user ${requestJSON.user}`;
+    	body = `Put item with id ${requestJSON.id} for user ${requestJSON.user}`;
     	break;
   	default:
     	throw new Error(`Unsupported route: "${event.routeKey}"`);
